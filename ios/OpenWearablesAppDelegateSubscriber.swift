@@ -9,8 +9,16 @@ public class OpenWearablesAppDelegateSubscriber: ExpoAppDelegateSubscriber {
     ) -> Bool {
         
         // Trigger background task registration
-        let _ = OpenWearablesHealthSDK.shared
-        
+        let sdk = OpenWearablesHealthSDK.shared
+
+        // The SDK keeps `host` in memory only; restore the persisted value so
+        // background relaunches (URLSession/BGTask wakes that fire before JS
+        // calls configure()) can build apiBaseUrl and refresh expired tokens.
+        let defaults = UserDefaults(suiteName: "com.openwearables.healthsdk.config") ?? .standard
+        if let host = defaults.string(forKey: "host") {
+            sdk.configure(host: host)
+        }
+
         return true
     }
 
