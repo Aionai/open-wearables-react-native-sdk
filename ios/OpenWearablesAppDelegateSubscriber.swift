@@ -1,6 +1,9 @@
 import ExpoModulesCore
 import OpenWearablesHealthSDK
 import UIKit
+import os
+
+private let owDiagLog = Logger(subsystem: "com.aionai.owdiag", category: "launch")
 
 public class OpenWearablesAppDelegateSubscriber: ExpoAppDelegateSubscriber {
     public func application(
@@ -11,18 +14,21 @@ public class OpenWearablesAppDelegateSubscriber: ExpoAppDelegateSubscriber {
         // Trigger background task registration
         let sdk = OpenWearablesHealthSDK.shared
 
-        // Diagnostic (umbrella#191): surface the SDK's own launch breadcrumbs
+        // Diagnostic (umbrella#191): NSLog from this app is not persisted to
+        // the unified log on current iOS, so route the SDK's own breadcrumbs
         // ("Restored N tracked types" / "Auto-restoring background sync..." /
-        // "Cannot auto-restore: no session") in the unified log so cold
-        // background launches can be inspected via `log collect`.
+        // "Cannot auto-restore: no session") through a public os_log. In cold
+        // background launches JS never boots, so this onLog handler stays
+        // installed for the whole window we need to observe; in foreground
+        // launches the Expo module's OnCreate replaces it, which is fine.
         sdk.logLevel = .always
+        sdk.onLog = { message in
+            owDiagLog.notice("[SDK] \(message, privacy: .public)")
+        }
 
         let appState = application.applicationState
-        NSLog(
-            "[OWDiag] didFinishLaunching state=%ld sessionValid=%d syncActive=%d",
-            appState.rawValue,
-            sdk.isSessionValid ? 1 : 0,
-            sdk.isSyncActive ? 1 : 0
+        owDiagLog.notice(
+            "didFinishLaunching state=\(appState.rawValue) sessionValid=\(sdk.isSessionValid) syncActive=\(sdk.isSyncActive)"
         )
 
         // The SDK keeps `host` in memory only; restore the persisted value so
@@ -30,10 +36,10 @@ public class OpenWearablesAppDelegateSubscriber: ExpoAppDelegateSubscriber {
         // calls configure()) can build apiBaseUrl and refresh expired tokens.
         let defaults = UserDefaults(suiteName: "com.openwearables.healthsdk.config") ?? .standard
         if let host = defaults.string(forKey: "host") {
-            NSLog("[OWDiag] restoring host at launch")
+            owDiagLog.notice("restoring host at launch")
             sdk.configure(host: host)
         } else {
-            NSLog("[OWDiag] no persisted host found at launch")
+            owDiagLog.notice("no persisted host found at launch")
         }
 
         return true
