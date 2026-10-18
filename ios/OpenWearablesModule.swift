@@ -88,9 +88,21 @@ public class OpenWearablesModule: Module {
             promise.resolve()
         }
         
+        // The native SDK dropped syncNow in 0.14. startBackgroundSync runs an
+        // incremental sync once the full export is done (and resumes the export
+        // otherwise); it reports that the sync started, not that it finished, so
+        // callers confirm the upload against the server.
         AsyncFunction("syncNow") { (promise: Promise) in
-            OpenWearablesHealthSDK.shared.syncNow {
-                promise.resolve()
+            guard OpenWearablesHealthSDK.shared.isSyncActive else {
+                promise.reject("ERR_SYNC_INACTIVE", "Background sync is not active")
+                return
+            }
+            OpenWearablesHealthSDK.shared.startBackgroundSync(syncDaysBack: nil) { started in
+                if started {
+                    promise.resolve()
+                } else {
+                    promise.reject("ERR_SYNC_NOT_STARTED", "Sync could not start")
+                }
             }
         }
         
