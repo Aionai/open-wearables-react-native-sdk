@@ -4,8 +4,14 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.functions.Coroutine
 import com.openwearables.health.sdk.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 public class OpenWearablesModule : Module() {
+  private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
   public override fun definition() = ModuleDefinition {
     Name("OpenWearablesHealthSDK")
 
@@ -100,21 +106,47 @@ public class OpenWearablesModule : Module() {
       OpenWearablesHealthSDK.getInstance().setSyncInterval(minutes)
     }
 
-    AsyncFunction("startBackgroundSync") Coroutine { syncDaysBack: Int? ->
-      return@Coroutine OpenWearablesHealthSDK.getInstance().startBackgroundSync(syncDaysBack)
+    // Since 0.13.0 the native startBackgroundSync also runs the first sync inline, which
+    // can be a whole historical export. Resolve once the session is checked and let the
+    // upload continue here, so callers are not blocked for the length of the export.
+    AsyncFunction("startBackgroundSync") { syncDaysBack: Int? ->
+      val sdk = OpenWearablesHealthSDK.getInstance()
+      if (!sdk.isSessionValid()) {
+        sendEvent("onLog", mapOf("message" to "Cannot start sync: not signed in"))
+        return@AsyncFunction false
+      }
+      syncScope.launch {
+        try {
+          sdk.startBackgroundSync(syncDaysBack)
+        } catch (e: IllegalStateException) {
+          sendEvent("onLog", mapOf("message" to "Cannot start sync: ${e.message}"))
+        }
+      }
+      return@AsyncFunction true
     }
 
     AsyncFunction("stopBackgroundSync") Coroutine { _: Unit? ->
       OpenWearablesHealthSDK.getInstance().stopBackgroundSync()
     }
 
+    // The native SDK dropped syncNow in 0.11.2. startBackgroundSync now uploads immediately
+    // and keeps the periodic worker (KEEP policy), so it is the "upload now" call; it is
+    // awaited here so the promise settles once the upload round has finished.
     AsyncFunction("syncNow") Coroutine { _: Unit? ->
-      OpenWearablesHealthSDK.getInstance().syncNow()
+      val sdk = OpenWearablesHealthSDK.getInstance()
+      if (!sdk.isSyncActive()) throw IllegalStateException("Background sync is not active")
+      sdk.startBackgroundSync(null)
     }
 
+    // iOS resolves false when there is nothing to resume; the native here throws instead.
     AsyncFunction("resumeSync") Coroutine { _: Unit? ->
-      OpenWearablesHealthSDK.getInstance().resumeSync()
-      return@Coroutine true
+      try {
+        OpenWearablesHealthSDK.getInstance().resumeSync()
+        return@Coroutine true
+      } catch (e: IllegalStateException) {
+        sendEvent("onLog", mapOf("message" to "Cannot resume sync: ${e.message}"))
+        return@Coroutine false
+      }
     }
 
     Function("isSyncActive") {
